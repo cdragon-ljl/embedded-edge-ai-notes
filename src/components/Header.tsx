@@ -35,7 +35,7 @@ export default function Header({
           <Link href="/" className="flex items-center gap-2">
             <span className="w-1 h-4 bg-accent rounded-sm" />
             <span className="text-sm font-semibold text-ink tracking-tight dark:text-slate-200">
-              嵌入式 AI 全栈笔记
+              嵌入式全栈笔记
             </span>
           </Link>
         )}

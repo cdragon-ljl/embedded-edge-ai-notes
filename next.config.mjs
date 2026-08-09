@@ -7,6 +7,12 @@ const nextConfig = {
     unoptimized: true,
   },
   reactStrictMode: true,
+  // Skip file tracing to avoid sandbox safe-delete hangs during static export
+  experimental: {
+    outputFileTracingExcludes: {
+      "*": ["**/*"],
+    },
+  },
 };
 
 export default nextConfig;

@@ -20,10 +20,10 @@ export default function HomePage() {
             </span>
           </div>
           <h1 className="text-4xl sm:text-5xl font-bold text-ink mb-3 tracking-tight leading-tight dark:text-slate-100">
-            嵌入式 AI 全栈笔记
+            嵌入式全栈笔记
           </h1>
           <p className="text-base text-ink-muted leading-relaxed max-w-xl dark:text-slate-400">
-            从 GPU 并行编程到 NPU 端侧部署——两条技术路径，覆盖 CUDA 算子开发、RKNN 模型转换量化、板端推理与性能优化。
+            覆盖嵌入式软件体系、GPU 并行编程到 NPU 端侧部署——C/C++/Rust 底层、CUDA 算子开发、RKNN 模型量化、板端推理与性能优化。
             共 {totalArticles} 篇实战文章。
           </p>
         </div>
@@ -35,7 +35,7 @@ export default function HomePage() {
       <footer className="border-t border-line mt-20 dark:border-slate-800">
         <div className="mx-auto max-w-3xl px-6 py-6 flex items-center justify-between">
           <p className="text-xs text-ink-faint dark:text-slate-500">
-            嵌入式 AI 全栈笔记
+            嵌入式全栈笔记
           </p>
           <p className="text-xs text-ink-faint font-mono dark:text-slate-600">
             {totalArticles} articles · {SERIES.length} series

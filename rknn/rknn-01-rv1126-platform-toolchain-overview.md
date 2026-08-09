@@ -1,17 +1,18 @@
-# RV1126 与 RKNN 生态总览：先搞懂这个 2 TOPS 的小盒子
+# 基于RV1126的端侧AI开发 · 第1期 准备工作及前序知识
 
-> 系列：RKNN 端侧部署实战：基于 RV1126 的模型转换与部署
-> 定位：本系列只讲 **RKNN 工具链的使用 + 模型部署**，从转换、量化、板端推理到性能调优，做透一个真实平台
-> 配套硬件：RV1126 开发板（本系列前 4 篇可仅用 PC；板端篇开始需要板子）
+> 定位：本系列主要学习RKNN 工具链的使用 + 模型部署，从转换、量化、板端推理到性能调优
+> 配套硬件：正点原子 RV1126 开发板（已下架，最新为RV1126B）+ IMX415 + 5.5' MIPI LCD
+> 参考文档：正点原子官方
+> 参考视频：[从ARM到AI视觉：基于RV1126B的嵌入式AI开发](https://space.bilibili.com/519718611/channel/collectiondetail?sid=7928216&spm_id_from=333.788.0.0)
 
-## 0. 本节目标
+## 0. 本文目标
 
-假设你是一个嵌入式软件工程师：会 C/C++、懂 Linux、玩过摄像头和 ISP，但**第一次接触 AI 模型部署**。你手头可能有一块 RV1126 开发板，或者正打算买一块，然后被"RKNN""NPU""量化""TOPS"这些词淹没。
+假设你是一个嵌入式软件工程师：会 C/C++、懂 MCU、RTOS、Linux、玩过摄像头和显示屏，但**第一次接触 AI 模型部署**。你可能有一块 RockChip 开发板，或者正打算买一块，然后被"RKNN""NPU""量化""TOPS"这些词淹没。
 
-本节把地基打牢，回答四个问题：
+本文涉及四个问题：
 
 1. **RV1126 到底是个什么东西？** 拆开 SoC 看结构，特别是那个 NPU 是干什么的；
-2. **NPU、TOPS、INT8 是什么意思？** 用嵌入式直觉解释，不堆术语；
+2. **NPU、TOPS、INT8 是什么意思？** 
 3. **RKNN 工具链是什么？** 为什么模型必须经过它才能在 NPU 上跑？**第一代（1.x）和第二代（Toolkit2）到底差在哪**——这是踩坑率最高的地方；
 4. **开发板和 SDK 怎么准备？** 买板、连板、拿到 SDK 后先看什么。
 
@@ -21,25 +22,12 @@
 
 **定义 1（SoC, System on Chip）**：把 CPU、内存控制器、各种外设控制器集成到一颗芯片上的系统级芯片。RV1126 就是一颗典型的**智能视觉 SoC**——专门为摄像头类产品（IPC 网络摄像机、智能门禁、智能视觉盒子）设计的。
 
-【图1：RV1126 SoC 结构】
+![board](./images/board.png)
+开发板资源图，摘自正点原子文档。
 
-```text
-┌─────────────────────── RV1126 ────────────────────────┐
-│ ┌───────────────┐   ┌───────────────┐   ┌───────────┐ │
-│ │ 四核 Cortex-A7 │   │  RISC-V MCU   │   │   NPU     │ │
-│ │ @ 1.5GHz      │   │  （低功耗管理） │   │ 2 TOPS    │ │
-│ │  Linux 主核   │   │               │   │  (INT8)   │ │
-│ └───────────────┘   └───────────────┘   └───────────┘ │
-│ ┌───────────────┐   ┌───────────────┐   ┌───────────┐ │
-│ │    ISP 2.0    │   │   VPU 编解码   │   │  DDR/存储  │ │
-│ │  多路摄像头   │   │ 4K 编码       │   │  控制器    │ │
-│ └───────────────┘   └───────────────┘   └───────────┘ │
-└────────────────────────────────────────────────────────┘
-```
+![soc](./images/soc.png)
 
-> 图1 生图 prompt：芯片结构示意图，白色背景。中心一颗方形 SoC 芯片，内部用不同颜色模块表示：蓝色"四核 Cortex-A7 @ 1.5GHz"、绿色"RISC-V MCU"、橙色"NPU 2 TOPS (INT8)"（高亮最大）、紫色"ISP 2.0 多路摄像头"、灰色"VPU 4K 编解码"、黄色"DDR 控制器"。模块之间用总线连线。标题"RV1126 智能视觉 SoC"。扁平信息图风格，比例 16:9，中文标注。
-
-### 1.2 各模块在干什么（嵌入式类比）
+### 1.2 各模块在干什么
 
 | 模块 | 规格 | 类比 |
 |:---|:---|:---|
@@ -48,8 +36,6 @@
 | **NPU** | **2 TOPS（INT8）** | **专门干神经网络矩阵运算的"算力车间"** |
 | ISP 2.0 | 多路摄像头图像处理 | 摄像头原始数据的"暗房"（去噪、白平衡、3A） |
 | VPU | 4K 编解码 | 视频的"压缩打包机" |
-
-对你来说，前四类都不陌生——你玩过的任何 Linux SoC 都有类似东西。**唯一全新的是 NPU**，我们重点讲它。
 
 ## 2. NPU、TOPS、INT8：三个词讲清楚
 
@@ -63,7 +49,7 @@
 
 ### 2.2 TOPS 是什么
 
-**定义 3（TOPS, Tera Operations Per Second）**：每秒执行一万亿次运算（Tera = 10¹²）。RV1126 的 NPU 是 **2 TOPS**，即每秒 2×10¹² 次运算——注意这里的"运算"通常指乘加。
+**定义 3（TOPS, Tera Operations Per Second）**：每秒执行一万亿次运算（Tera = 10¹²）。RV1126 的 NPU 是 **2 TOPS**，即每秒 2×10¹² 次运算——注意这里的"运算"通常指乘加。（最新RV1126B NPU算力 3 TOPS）
 
 嵌入式直觉：MCU 的算力我们看 MIPS（每秒百万指令），NPU 的算力看 TOPS（每秒万亿次运算），一个天上一个地下。**2 TOPS 的绝对值不大**（现在手机 NPU 有几十 TOPS），但对 IPC 场景的轻量模型（分类、检测、人脸）绰绰有余。
 
@@ -79,7 +65,7 @@
 
 你训练（或下载）的模型是 TensorFlow / PyTorch / ONNX 格式——这是"通用世界"的描述。但 NPU 不认这些格式，它只认自己的一套指令和内存布局。**必须有一个工具把模型翻译成 NPU 能跑的格式。**
 
-**定义 5（RKNN）**：瑞芯微 NPU 的模型格式与运行时（Runtime）总称。模型文件后缀是 **`.rknn`**，板子上通过 **`librknnmrt.so`** 这个运行时库来加载和执行它。
+**定义 5（RKNN）**：瑞芯微 NPU 的模型格式与运行时（Runtime）总称。模型文件后缀是 **`.rknn`**，板子上通过 **`librknnmrt.so`** 这个运行时库来加载和执行它。（其他NPU厂商的模型文件格式各不相同，如华为昇腾NPU支持的模型文件后缀为`.om`）
 
 嵌入式类比：**RKNN 工具链就是"深度学习版的交叉编译工具链"**：
 
@@ -88,7 +74,11 @@
 RKNN：      ONNX/TFLite 模型 ──(rknn-toolkit)──▶ .rknn 模型 ──(librknnmrt)──▶ NPU 上跑
 ```
 
-你交叉编译时用 `aarch64-linux-gnu-gcc` 生成 ARM 指令；RKNN 工具链在 PC 上把模型"编译"成 NPU 指令。**模型转换 = 编译，.rknn 文件 = 可执行文件，librknnmrt = 动态链接库。**
+交叉编译时用 `aarch64-linux-gnu-gcc` 生成 ARM 指令；
+
+RKNN 工具链在 PC 上把模型"编译"成 NPU 指令。
+
+**模型转换 = 编译，.rknn 文件 = 可执行文件，librknnmrt = 动态链接库。**
 
 ### 3.2 RKNN 全流程（先有个整体印象）
 
@@ -111,29 +101,22 @@ RKNN：      ONNX/TFLite 模型 ──(rknn-toolkit)──▶ .rknn 模型 ─�
 │  rknn_outputs_get() 取回输出（类别/检测框）       │
 └───────────────────────────────────────────────────┘
 ```
-
-> 图2 生图 prompt：流程图，白色背景。上半部分蓝色区块"PC 端：模型转换"包含四个纵向步骤（config 配置目标平台 → load 加载模型 → build 编译量化 → export 导出 .rknn）；中间一个向下箭头标注"拷贝到板子"；下半部分绿色区块"板端：NPU 推理"包含四个纵向步骤（rknn_init 初始化 → rknn_inputs_set 设置输入 → rknn_run 执行 → rknn_outputs_get 取结果）。扁平插画风，比例 16:9，中文标注。
-
-PC 端那半部分（转换）是本系列前 4 篇的内容，板端那半部分（推理）是后面几篇的内容。现在不需要记住 API，知道有这条流水线就行。
+![rknn](./images/rknn.png)
 
 ## 4. ⚠️ 第一代工具链 vs 第二代：最大的坑
 
 这是本系列最重要的一个"先决知识"，先记住：
 
-> **RV1126 / RV1109 / RV1126 系列使用 `rknn-toolkit` 1.7.x（第一代）；RK3566 / RK3568 / RK3588 使用 `RKNN-Toolkit2`（第二代）。两者完全不通用，教程、报错、API 都不能混用。**
+> **RV1109 / RV1126 系列使用 `rknn-toolkit` 1.6.x（第一代）；RV1126B / RK3566 / RK3568 / RK3588 使用 `RKNN-Toolkit2`（第二代）。两者完全不通用，教程、报错、API 都不能混用。**
 
 | 项目 | 第一代 rknn-toolkit | 第二代 RKNN-Toolkit2 |
 |:---|:---|:---|
-| 适用芯片 | RV1109 / RV1126 / RV1126 | RK3566 / RK3568 / RK3588 / RK3576 |
+| 适用芯片 | RV1109 / RV1126 | RV1126B / RK3566 / RK3568 / RK3588 / RK3576 |
 | 版本号 | 1.7.x | 2.x（如 2.3.0） |
 | Python 包名 | `rknn-toolkit` | `rknn-toolkit2` |
 | 转换 API | `load_tensorflow / load_tflite / load_caffe / load_onnx` | `load_pytorch / load_onnx / load_tensorflow ...` |
 | 板端运行时 | `librknnmrt.so` | `librknnrt.so` |
 | 支持框架 | TF / TFLite / Caffe / ONNX | 更多（含 PyTorch 直转） |
-
-**为什么容易踩坑**：网上一搜"RKNN 教程"，90% 是 RK3568 / RK3588 的 RKNN-Toolkit2 教程，里面 `pip install rknn-toolkit2`、`load_pytorch` 这些命令拿到 RV1126 上全都不对。**判断方法就一条：看你的芯片型号。RV1126 永远用 1.7.x，看到 Toolkit2 的教程直接跳过。**
-
-顺带一个知识点：**第一代不支持 PyTorch 直接转换**，需要先把 PyTorch 模型导出成 ONNX 再转（这也是为什么本系列选 ONNX/TFLite 作为入口）。转换支持框架：TensorFlow、TFLite、Caffe、ONNX。
 
 ## 5. 开发板与 SDK 准备
 
@@ -144,51 +127,40 @@ RV1126 生态里常见的板子：
 | 开发板 | 特点 |
 |:---|:---|
 | 瑞芯微官方智慧视觉开发板 | 最全参考设计，文档最完整 |
-| 易百纳 RV1126 板 | 价格低、资料全、社区活跃，IPC 方案多 |
-| Firefly Core-1126-JD4 | 核心板 + 底板形式，适合产品化 |
-
-选型建议：**如果只是学习，选资料最全、社区反馈最多的板子**（易百纳或官方板都行）；确认卖家提供 SDK 与工具链版本信息，避免拿到不配套的 SDK。
+| 正点原子 RV1126/RV1126B 板 | 资料全、社区活跃，网络教程丰富 |
 
 ### 5.2 SDK 是什么、装在哪
 
-RV1126 的 SDK 是瑞芯微的 **Linux SDK**（Buildroot 方案），编译出整个板端系统镜像。拿到 SDK 后，先找这两个东西：
+RV1126 的 SDK 是瑞芯微的 **Linux SDK**（Buildroot 方案），编译出整个板端系统镜像。SDK安装方式参见正点原子资料文档。
 
 ```text
-SDK 根目录/
-├── external/
-│   └── rknn-toolkit/        # 瑞芯微在 SDK 里随附的 RKNN 工具链目录
-│       ├── rknn-toolkit/    # PC 端转换工具（Python 包）
-│       ├── rknn-toolkit-lite/  # 板端 Python 推理（v1.7.x）
-│       └── rknpu/           # 板端 C 运行时：librknnmrt.so + rknn_api.h
-├── buildroot/               # 系统构建
-├── kernel/                  # Linux 内核
-└── docs/
+~/RV1126/atk-rv1126-sdk$ tree -L 1
+.
+├── IMAGE
+├── Makefile -> buildroot/build/Makefile
+├── app
+├── br.log
+├── build.sh -> device/rockchip/common/build.sh
+├── buildroot
+├── device
+├── docs
+├── envsetup.sh -> buildroot/build/envsetup.sh
+├── external
+├── kernel
+├── mkfirmware.sh -> device/rockchip/common/mkfirmware.sh
+├── prebuilts
+├── rkbin
+├── rkflash.sh -> device/rockchip/common/rkflash.sh
+├── rockdev
+├── tools
+└── u-boot
 ```
 
-**你现在需要的不是整个 SDK**——本系列前几篇只在 PC 上工作，只需要 `rknn-toolkit` 这一个 Python 包（安装方法后文详述）。SDK 和板子留到板端篇再派上用场。
+### 5.3 学习路径
 
-### 5.3 无板学习路径
+**模型转换、量化和 PC 模拟推理不需要板子**——rknn-toolkit 在 PC 上就能完成转换和模拟执行。板端部署开始才需要真实硬件。想先体验的读者可以先把 PC 端跑通，再决定买不买板。
 
-好消息：**模型转换、量化和 PC 模拟推理完全不需要板子**——rknn-toolkit 在 PC 上就能完成转换和模拟执行。所以本系列前 4 篇（环境、转换、量化、精度评估）可以零硬件起步；从板端篇开始才需要真实硬件。想先体验的读者可以先把 PC 端跑通，再决定买不买板。
-
-## 6. 练习与里程碑
-
-### 练习
-
-1. **口头解释**：用 3 句话向同事解释"RV1126 的 NPU 2 TOPS 是什么意思"（提示：TOPS=每秒万亿次运算，INT8 精度，专门加速神经网络矩阵运算）。
-2. **画图**：手画一张 RKNN 全流程草图（PC 转换 → 板端推理），标注每个环节用到的 API 名（config/build/export、init/run/outputs_get）。
-3. **辨坑**：看到一篇教程写 `pip install rknn-toolkit2` + `load_pytorch`，判断它适不适用于 RV1126，为什么？
-4. **查资料**：上瑞芯微官网或 GitHub 搜 `rknn-toolkit`，找到 1.7.x 的 release 页面，记下官方支持的 Ubuntu 版本和 Python 版本（后面装环境时要用）。
-
-### 里程碑自检
-
-- [ ] 能说出 RV1126 的 CPU/NPU/ISP/VPU 各是什么
-- [ ] 能用类比解释 NPU、TOPS、INT8 三个词
-- [ ] 能画出 RKNN 转换与部署全流程
-- [ ] 能一口说出 RV1126 用第一代 rknn-toolkit 1.7.x 而非 Toolkit2
-- [ ] 知道 SDK 里 rknn-toolkit 目录在哪、板端运行时叫什么
-
-## 7. 小结
+## 6. 小结
 
 本节建立了整个系列的认知地图：
 
@@ -196,8 +168,7 @@ SDK 根目录/
 - **NPU/TOPS/INT8** = 神经网络专用加速器 / 每秒万亿次运算 / 8 位整数精度；
 - **RKNN 工具链** = 模型与 NPU 之间的"交叉编译工具链"，把 ONNX/TFLite 翻译成 `.rknn`，板端用 `librknnmrt.so` 执行；
 - **最大的坑** = RV1126 必须用第一代 `rknn-toolkit` 1.7.x，RKNN-Toolkit2 是 RK356x/3588 的，二者不通用；
-- **学习路径** = 前几篇纯 PC 即可（转换/量化/模拟），板端篇开始需要真实硬件。
 
-下一件事很直接：把 PC 端环境装好，跑通第一个模型转换——"ONNX/TFLite → .rknn"这一步走通，整个系列的地基就稳了。
+下一节：把 PC 端环境装好，跑通第一个模型转换——"ONNX/TFLite → .rknn"这一步走通，整个系列的地基就稳了。
 
 > 🏷️ 标签：#RV1126 #RKNN #NPU #TOPS #INT8 #瑞芯微 #智能视觉
