@@ -1,12 +1,13 @@
-# PC 端环境搭建与第一个转换：把 MobileNet 变成 .rknn
+# 基于RV1126的端侧AI开发 · 第2期 环境搭建与Resnet50v2模型转换测试
 
-> 系列：RKNN 端侧部署实战：基于 RV1126 的模型转换与部署
-> 前置：RKNN-01（平台与工具链总览）
-> 配套环境：x86_64 PC + Ubuntu 18.04/20.04（本文以 18.04 为例）、Python 3.6（版本说明见下）；本节的转换与模拟推理**不需要 RV1126 板子**
+> 定位：本系列主要学习RKNN 工具链的使用 + 模型部署，从转换、量化、板端推理到性能调优
+> 配套硬件：正点原子 RV1126 开发板（已下架，最新为RV1126B）+ IMX415 + 5.5' MIPI LCD
+> 参考文档：正点原子官方
+> 参考视频：[从ARM到AI视觉：基于RV1126B的嵌入式AI开发](https://space.bilibili.com/519718611/channel/collectiondetail?sid=7928216&spm_id_from=333.788.0.0)
 
 ## 0. 本节目标
 
-上一节认识了 RV1126 和 RKNN 生态。本节动手走通第一段流水线：**在 PC 上把一个小型分类模型（TFLite 格式）转换成 `.rknn` 文件，并用 PC 模拟器跑一次推理，看到分类结果**。
+上一节认识了 RV1126 和 RKNN 生态。本节动手走通第一段流水线：**在 PC 上把一个小型分类模型（ONNX 格式）转换成 `.rknn` 文件，并用 PC 模拟器跑一次推理，看到分类结果**。
 
 完成本节，你就掌握了 RKNN 工具链的四个核心步骤：`config → load → build → export`，外加模拟推理 `init_runtime → inference`。这是整个系列的地基——后面所有内容（量化、精度评估、板端部署）都建立在这条流水线上。
 
@@ -16,18 +17,16 @@
 
 | 项 | 要求 |
 |:---|:---|
-| PC | x86_64 架构（rknn-toolkit 1.7.x 官方 wheel 只提供 Linux x86_64） |
-| 系统 | Ubuntu 18.04 或 20.04（官方推荐 18.04） |
+| PC | x86_64 架构（rknn-toolkit 1.6.x 官方 wheel 只提供 Linux x86_64） |
+| 系统 | Ubuntu 18.04 或 20.04（官方推荐 18.04，本系列文章使用20.04） |
 | Python | 3.6（推荐；1.7.5 也提供 cp37 的 wheel，以官方 release 说明为准） |
 | 网络 | 能访问 GitHub 下载 wheel 与模型 |
 
-**⚠️ 版本红线**：这里安装的是 `rknn-toolkit`（一代，1.7.x），**不是 `rknn-toolkit2`**——装错包，后面所有 API 都会对不上。
-
-【图1：PC 转换环境与板端运行环境的分工】
+**⚠️ 版本红线**：这里安装的是 `rknn-toolkit`（一代，1.6.x），**不是 `rknn-toolkit2`**——装错包，后面所有 API 都会对不上。
 
 ```text
 ┌──────────────────────── PC（x86_64, Ubuntu）────────────────────────┐
-│  rknn-toolkit 1.7.x（Python 包）                                     │
+│  rknn-toolkit 1.6.x（Python 包）                                     │
 │   ├─ 模型转换：config → load → build → export_rknn  →  model.rknn   │
 │   ├─ 模拟推理：init_runtime(target=None) 在 PC 上模拟 NPU 执行       │
 │   └─ 量化/精度评估（后续篇）                                          │
@@ -39,205 +38,230 @@
 └───────────────────────────────────────────────────────────────────────┘
 ```
 
-> 图1 生图 prompt：两张卡片对比图，白色背景。上卡片蓝色标题"PC 端（x86_64 Ubuntu）"内部列出：模型转换 config→load→build→export、模拟推理 init_runtime、量化与精度评估；下卡片绿色标题"RV1126 板端"内部列出：librknnmrt.so、rknn-toolkit-lite、真实 NPU 推理。两卡片之间一个向下箭头标注"拷贝 .rknn"。扁平插画风，比例 16:9，中文标注。
 
 ### 1.2 安装步骤
 
-```bash
-# 1. 系统依赖
-sudo apt update
-sudo apt install -y python3-pip python3-dev
-
-# 2. 安装 rknn-toolkit 1.7.x 的依赖（注意锁定版本，新版 numpy/onnx 会冲突）
-pip3 install numpy==1.16.6 onnx==1.7.0 protobuf==3.12.2
-
-# 3. 下载 rknn-toolkit wheel（瑞芯微官方 GitHub releases）
-#    网址：https://github.com/rockchip-linux/rknn-toolkit/releases
-#    选择 1.7.x 版本，下载对应 Python 版本的 wheel，例如：
-#    rknn-toolkit-1.7.5-cp36-cp36m-linux_x86_64.whl（Python 3.6）
-pip3 install rknn-toolkit-1.7.5-cp36-cp36m-linux_x86_64.whl
-
-# 4. 验证安装
-python3 -c "from rknn.api import RKNN; print('RKNN 工具链 OK')"
+上节安装的正点原子SDK中已经包含了rknn-toolkit，版本号1.6.0。
+```text
+~/RV1126/atk-rv1126-sdk/external/rknn-toolkit$ tree -L 2
+.
+├── LICENSE
+├── doc
+├── examples
+│   ├── caffe
+│   ├── common_function_demos
+│   ├── darknet
+│   ├── keras
+│   ├── mxnet
+│   ├── onnx
+│   ├── pytorch
+│   ├── rknn_convert
+│   ├── tensorflow
+│   └── tflite
+├── packages
+│   ├── packages.md5sum
+│   ├── required-packages-for-arm64-debian9-python35
+│   ├── required-packages-for-win-python36
+│   ├── requirements-cpu.txt
+│   ├── requirements-gpu.txt
+│   ├── rknn_toolkit-1.6.0-cp35-cp35m-linux_aarch64.whl
+│   ├── rknn_toolkit-1.6.0-cp35-cp35m-linux_x86_64.whl
+│   ├── rknn_toolkit-1.6.0-cp36-cp36m-linux_x86_64.whl
+│   ├── rknn_toolkit-1.6.0-cp36-cp36m-macosx_10_15_x86_64.whl
+│   ├── rknn_toolkit-1.6.0-cp36-cp36m-win_amd64.whl
+│   ├── rknn_toolkit-1.6.0-cp37-cp37m-linux_aarch64.whl
+│   └── rknn_toolkit-1.6.0-cp37-cp37m-macosx_10_15_x86_64.whl
+├── platform-tools
+│   ├── drivers_installer
+│   ├── ntp
+│   └── update_rk_usb_rule
+└── rknn-toolkit-lite
+    ├── examples
+    └── packages
 ```
-
-> ⚠️ 如果 `import rknn` 报缺失依赖，根据报错逐个补齐（常见：`onnx`、`protobuf`、`numpy`）；如果提示 wheel 平台不匹配，检查是否下载了对应 Python 版本的 wheel。不同小版本（1.7.2 / 1.7.5）对 Python 的支持略有差异，以 release 页说明为准。
-
-### 1.3 准备模型与测试图
-
-用一个 TensorFlow 官方的 MobileNetV1 分类模型（TFLite 格式）：
-
-```bash
-# 下载 MobileNetV1 1.0 224（TensorFlow 官方 model zoo）
-wget https://storage.googleapis.com/download.tensorflow.org/models/mobilenet_v1_2018_02_22/mobilenet_v1_1.0_224.tgz
-tar xzf mobilenet_v1_1.0_224.tgz
-ls mobilenet_v1_1.0_224.tflite
+### 1.2.1 安装Anaconda3并创建python3.6虚拟环境：
 ```
+conda create -n rknn160_py36 python=3.6
+conda activate rknn160_py36
+```
+### 1.2.2 安装requirements
+```
+pip install -r requirements-cpu.txt
+pip install rknn_toolkit-1.6.0-cp36-cp36m-linux_x86_64.whl
+```
+由于电脑环境不同，如安装出错可借助AI辅助安装。
 
-再准备一张测试图片（任意类别明显的图即可，比如一张猫的照片），命名为 `test.jpg`，放在同目录。
-
-## 2. 第一个转换脚本：完整可照抄
-
-创建 `convert.py`：
-
-```python
-# convert.py —— MobileNetV1 (TFLite) → .rknn
+### 1.2.3 验证
+```
+python
 from rknn.api import RKNN
-
-# 1. 创建 RKNN 对象（verbose 打开日志）
-rknn = RKNN(verbose=True)
-
-# 2. 配置：目标平台 + 输入预处理参数
-ret = rknn.config(
-    mean_values=[[127.5, 127.5, 127.5]],   # 每个通道的均值
-    std_values=[[127.5, 127.5, 127.5]],    # 每个通道的标准差
-    target_platform='rv1126')              # ⚠️ 一代平台，不能写 rk3568 等
-if ret != 0:
-    print('config 失败，退出'); exit(ret)
-
-# 3. 加载 TFLite 模型
-ret = rknn.load_tflite(model='mobilenet_v1_1.0_224.tflite')
-if ret != 0:
-    print('load_tflite 失败，退出'); exit(ret)
-
-# 4. 构建（第一步先不量化，跑通流程）
-ret = rknn.build(do_quantization=False)
-if ret != 0:
-    print('build 失败，退出'); exit(ret)
-
-# 5. 导出 .rknn 文件
-ret = rknn.export_rknn('mobilenet_v1.rknn')
-if ret != 0:
-    print('export 失败，退出'); exit(ret)
-
-print('✅ 转换完成：mobilenet_v1.rknn')
-rknn.release()
 ```
+如无报错则表示环境安装成功。
 
-运行：
+## 2 模型转换与PC端测试
 
-```bash
-python3 convert.py
-```
-
-如果一切正常，目录下会生成 `mobilenet_v1.rknn`（约 4~5 MB，比原始模型略大——多了 NPU 的指令和内存布局信息）。**恭喜，你的第一个 .rknn 模型诞生了。**
-
-## 3. config 参数在干什么：预处理必须与模型训练时一致
-
-### 3.1 mean / std 的作用
-
-`mean_values` 和 `std_values` 不是随便填的，它们定义了一个**固定的输入预处理**，会在推理时作用到你的输入数据上：
-
-```text
-预处理后的像素 = (原始像素 - mean) / std
-```
-
-MobileNetV1 官方训练时的预处理是：输入归一化到 [-1, 1]，即 `(x / 255 - 0.5) / 0.5`。用 mean=127.5、std=127.5 展开就是同一个公式：
-
-```text
-(原始 0~255 像素 - 127.5) / 127.5  =  原始像素 / 127.5 - 1  =  [0,1] 映射到 [-1,1]
-```
-
-**规则：config 的 mean/std 必须和模型训练时用的预处理一致**，否则模型推理结果会显著变差——就像 ADC 采样率设置错了，采集到的数据对不上算法假设。
-
-### 3.2 数据流视角
-
-【图2：输入预处理数据流】
-
-```text
- 原始图像（0~255 整数）
-      │
-      │  读取 + resize 到 224×224
-      ▼
- 图像数组（float32, 224×224×3）
-      │
-      │  NPU 运行时自动应用 config 的 mean/std：
-      │  像素' = (像素 - 127.5) / 127.5        ← 这一步由 RKNN 自动完成
-      ▼
- 送入模型（范围 ≈ [-1, 1]）
-      │
-      │  模型推理
-      ▼
- 输出（1000 个类别的得分）
-```
-
-> 图2 生图 prompt：横向数据流图，白色背景。从左到右五个节点用箭头连接：① 原始图像（0~255 整数，小图图标）→ ② 读取+resize 224×224 → ③ 图像数组 float32 → ④ 自动应用 mean/std 预处理（高亮，公式 (x-127.5)/127.5）→ ⑤ 模型推理输出 1000 类得分。扁平插画风，比例 16:9，中文标注。
-
-**关键点**：mean/std 是在 NPU 运行时**自动**应用的，你不需要在代码里手动归一化——但要确保传入的原始像素范围（0~255）与 config 匹配。如果手动归一化到 0~1 又配了 mean=127.5，结果会差 255 倍。
-
-## 4. 模拟推理：PC 上先看到分类结果
-
-转换成功后，用 PC 模拟器（不接板子）跑一次推理：
-
-创建 `infer.py`：
-
+### 2.1 模型转换
+篇幅问题，这里只展示部分转换脚本代码，基于`rknn_toolkit 1.6.0`，最新版本部分`api`参数已变：
 ```python
-# infer.py —— 用 PC 模拟器跑 .rknn
-import numpy as np
-from PIL import Image
-from rknn.api import RKNN
+if __name__ == '__main__':
+    # ==============================================================
+    # 第 0 步：创建 RKNN 对象
+    # ==============================================================
+    # RKNN 类封装了 rknn-toolkit 的全部功能：
+    #   加载模型 -> 配置 -> 构建 -> 导出 -> 初始化 -> 推理
+    # 注意：在使用完 rknn 后需要调用 rknn.release() 释放资源。
+    rknn = RKNN()
 
-rknn = RKNN(verbose=True)
+    # ==============================================================
+    # 第 1 步：下载 ONNX 模型（仅当本地不存在时执行）
+    # ==============================================================
+    ...
 
-# 加载之前转换好的模型
-ret = rknn.load_rknn('mobilenet_v1.rknn')
-if ret != 0:
-    print('load_rknn 失败'); exit(ret)
+    # ==============================================================
+    # 第 2 步：配置模型参数（最关键的步骤之一）
+    # ==============================================================
+    # rknn.config 告诉转换器如何在 PC 上模拟 RKNPU 的行为：
+    #   mean_values     : 图像三个通道的均值（在推理前减去，与训练时保持一致）
+    #   std_values      : 图像三个通道的标准差（除以标准差，ImageNet 默认行）
+    #   reorder_channel : 输入图像的通道顺序 '0 1 2' 表示 RGB；
+    #                     If模型训练时用 BGR，可改成 '2 1 0'
+    #   target_platform : 目标运行平台：
+    #                     'rk3399pro'（老一代）、“rv1126”或“rv1109”
+    print('--> config model')
+    rknn.config(mean_values=[[123.675, 116.28, 103.53]], std_values=[[58.82, 58.82, 58.82]],
+                reorder_channel='0 1 2', target_platform='rv1126')
+    # 注意：
+    #   mean/std 的数值来自 ImageNet 训练集统计，
+    #   如果你用的是自己的训练模型，请替换成你自己的均值/方差！
+    print('done')    
 
-# 初始化运行时：target=None 表示 PC 模拟
-ret = rknn.init_runtime()
-if ret != 0:
-    print('init_runtime 失败'); exit(ret)
+    # ==============================================================
+    # 第 3 步：加载 ONNX 模型
+    # ==============================================================
+    # rknn.load_onnx 会把 ONNX 模型解析为一个中间表示。
+    # 返回值 non-zero 表示加载失败。
+    print('--> Loading model')
+    ret = rknn.load_onnx(model=ONNX_MODEL)
+    if ret != 0:
+        print('Load resnet50v2 failed!')
+        exit(ret)                # 失败则退出程序
+    print('done')
 
-# 读图并 resize 到 224×224
-img = Image.open('test.jpg').convert('RGB').resize((224, 224))
-img = np.array(img).astype(np.float32)   # 0~255，与 config 匹配
+    # ==============================================================
+    # 第 4 步：构建 RKNN 模型（核心转换过程）
+    # ==============================================================
+    # do_quantization=True 表示做 INT8 量化（降低模型精度、内存占用），
+    #                     并且可以大幅提升 NPU 推理速度；
+    # dataset 参数指向一个 txt 文件，每行一个图片路径，
+    # 这些图片用于量化时估算每个激活值的范围。
+    # 注意：如果量化后精度下降太明显，可尝试加大 dataset 中的图片数量，
+    #       或关闭量化（do_quantization=False）。
+    print('--> Building model')
+    ret = rknn.build(do_quantization=True, dataset='./dataset.txt')
+    if ret != 0:
+        print('Build resnet50v2 failed!')
+        exit(ret)
+    print('done')
 
-# 推理：TFLite 模型输入是 NHWC（1,224,224,3）
-outputs = rknn.inference(inputs=[img])
-print('输出 shape:', outputs[0].shape)
+    # ==============================================================
+    # 第 5 步：导出 RKNN 模型（保存到磁盘）
+    # ==============================================================
+    print('--> Export RKNN model')
+    ret = rknn.export_rknn(RKNN_MODEL)
+    if ret != 0:
+        print('Export resnet50v2.rknn failed!')
+        exit(ret)
+    print('done')
 
-# 取 top5
-scores = outputs[0].flatten()
-top5 = np.argsort(scores)[::-1][:5]
-for i, idx in enumerate(top5):
-    print(f'  Top{i+1}: 类别 {idx}  得分 {scores[idx]:.4f}')
+    # ==============================================================
+    # 第 6 步：加载测试图片（必须与 model 输入尺寸一致）
+    # ==============================================================
+    # OpenCV 读取图默认是 BGR 通道顺序，
+    # 而 ImageNet 模型训练时使用的是 RGB 顺序，
+    # 因此需要 cv2.cvtColor 转换通道顺序。
+    img = cv2.imread('./dog_224x224.jpg')
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
-rknn.release()
+    # ==============================================================
+    # 第 7 步：初始化运行环境
+    # ==============================================================
+    # rknn.init_runtime() 默认在 PC 上跑模拟器（使用 CPU/x86）；
+    # 要跑在开发板（如 RV1126）上的话，需要连接上板子，
+    # 并指定 target='rv1126' 等参数（需要通过 USB 连接设备）。
+    print('--> Init runtime environment')
+    ret = rknn.init_runtime()
+    if ret != 0:
+        print('Init runtime environment failed')
+        exit(ret)
+    print('done')
+
+    # ==============================================================
+    # 第 8 步：模型推理（Inference）
+    # ==============================================================
+    # rknn.inference 返回一个列表，list 中每个元素是某个输出的结果。
+    # 这里只有一个输出（1000 类的 logits），所以直接取 [0]。
+    print('--> Running model')
+    outputs = rknn.inference(inputs=[img])
+    x = outputs[0]                 # x.shape = (1, 1000)
+
+    # 用 softmax 把 logits 归一化成概率（分布）,
+    # 便于直观比较每个类别的置信度：
+    #   softmax(x)_i = exp(x_i) / sum(exp(x_j))
+    output = np.exp(x)/np.sum(np.exp(x))
+    outputs = [output]             # 打包成与接口一致的格式
+    show_outputs(outputs)          # 打印 Top-5 结果
+    print('done')
+
+    # ==============================================================
+    # 第 9 步：释放资源
+    # ==============================================================
+    rknn.release()
 ```
 
-运行：
+### 2.2 PC端测试
+在以下路径下包含了一些基础的模型测试用例，这里选择`onnx`下的`resnet50v2`进行环境测试（关于模型知识后续会再做介绍，这里只是测试环境是否OK）：
+```shell
+(rknn160_py36) cloong@DESKTOP-ND03BR9:~/RV1126/atk-rv1126-sdk/external/rknn-toolkit/examples$ ls
+caffe  common_function_demos  darknet  keras  mxnet  onnx  pytorch  rknn_convert  tensorflow  tflite
+(rknn160_py36) cloong@DESKTOP-ND03BR9:~/RV1126/atk-rv1126-sdk/external/rknn-toolkit/examples$ cd onnx/
+(rknn160_py36) cloong@DESKTOP-ND03BR9:~/RV1126/atk-rv1126-sdk/external/rknn-toolkit/examples/onnx$ ls
+resnet50v2
+(rknn160_py36) cloong@DESKTOP-ND03BR9:~/RV1126/atk-rv1126-sdk/external/rknn-toolkit/examples/onnx$ cd resnet50v2/
+(rknn160_py36) cloong@DESKTOP-ND03BR9:~/RV1126/atk-rv1126-sdk/external/rknn-toolkit/examples/onnx/resnet50v2$ ls
+README  dataset.txt  dog_224x224.jpg  resnet50v2.onnx  test.py
+(rknn160_py36) cloong@DESKTOP-ND03BR9:~/RV1126/atk-rv1126-sdk/external/rknn-toolkit/examples/onnx/resnet50v2$ python test.py
+--> config model
+done
+--> Loading model
+W Please confirm that your onnx opset_version <= 11 (current opset_verison = 12)!!!
+done
+--> Building model
+done
+--> Export RKNN model
+done
+--> Init runtime environment
+done
+--> Running model
+resnet50v2
+-----TOP 5-----
+[155]: 0.6592655181884766
+[154]: 0.29156938195228577
+[262]: 0.027164233848452568
+[152]: 0.006162853911519051
+[204 254]: 0.0029354472644627094
 
-```bash
-pip3 install pillow
-python3 infer.py
+done
+(rknn160_py36) cloong@DESKTOP-ND03BR9:~/RV1126/atk-rv1126-sdk/external/rknn-toolkit/examples/onnx/resnet50v2$ ls
+README  dataset.txt  dog_224x224.jpg  resnet50v2.onnx  resnet50v2.rknn  test.py
 ```
+从运行结果可以看出，TOP1为[155]，对应`imagenet`标签中的`Shih-Tzu`（西施犬）。
+输入图片如下：
 
-**预期输出**（猫图）：
+![dog_224x224](./images/dog_224x224.jpg)
 
-```text
-输出 shape: (1, 1000)
-  Top1: 类别 281  得分 0.9132
-  Top2: 类别 282  得分 0.0411
-  ...
-```
+脚本执行后同时生成`resnet50v2.rknn`模型文件。
 
-类别 281 在 ImageNet 标签里是 tabby cat（虎斑猫）——如果测试图是猫，这个结果就对了。（ImageNet 1000 类标签文件可下载对照：`https://storage.googleapis.com/download.tensorflow.org/data/ImageNetLabels.txt`，注意该文件含背景类共 1001 行，索引要减 1 核对。）
-
-**模拟推理的意义**：`init_runtime()` 不带 target 参数时，rknn-toolkit 在 PC 上**模拟 NPU 执行**（用 CPU 模拟指令），让你在没有板子的情况下验证"模型转得对不对、结果准不准"。模拟的速度比真实 NPU 慢很多，但精度行为一致——所以 PC 模拟是量产前快速验证的利器。
-
-## 5. 换成 ONNX 模型：只需改两行
-
-一代工具链同样支持 ONNX 导入。把 `convert.py` 的两行替换即可：
-
-```python
-# 替换 load_tflite 这一行：
-ret = rknn.load_onnx(model='mobilenetv2-7.onnx')   # 从 ONNX Model Zoo 下载
-```
-
-其余（config / build / export）完全不变。**转换入口换框架只是换一个 load 函数**，这是 RKNN 工具链设计得好的地方——后续用 Caffe/TF 也一样。
-
-## 6. 常见报错与排查
+## 3. 常见报错与排查
 
 | 报错 | 原因 | 处理 |
 |:---|:---|:---|
@@ -248,32 +272,20 @@ ret = rknn.load_onnx(model='mobilenetv2-7.onnx')   # 从 ONNX Model Zoo 下载
 | 推理结果全是垃圾 | mean/std 与模型训练预处理不一致 | 核对 config 的 mean/std 与模型说明 |
 | 模拟推理很慢 | 正常，PC 模拟比 NPU 慢 | 用小型模型（MobileNet 级别）即可 |
 
-## 7. 练习与里程碑
-
-### 练习
-
-1. **跑通全流程**：按 1.2 装环境 → 下载 MobileNet → 运行 `convert.py` → 运行 `infer.py`，确认 top1 类别与测试图内容相符。
-2. **换图测试**：换 3 张不同类别的图（猫、狗、车），观察 top5 结果是否合理。
-3. **对比预处理**：把 config 的 mean/std 改成 `[0,0,0]`/`[1,1,1]` 重新转换推理，观察结果变化，体会"预处理必须匹配"这条规则。
-4. **ONNX 复现**：从 ONNX Model Zoo 下载 mobilenetv2，按第 5 节改两行完成转换，对比两种入口的差异。
-
-### 里程碑自检
-
-- [ ] 能独立装好 rknn-toolkit 1.7.x 并验证 import
-- [ ] 能把 TFLite 模型转成 .rknn 并导出
-- [ ] 能用 PC 模拟器跑通一次推理并看到正确的 top1
-- [ ] 能解释 mean/std 的作用和"必须与训练一致"的原因
-- [ ] 知道 TFLite 与 ONNX 入口只需换 load 函数
-
-## 8. 小结
+## 4. 小结
 
 本节跑通了 RKNN 转换流水线的第一段：
 
-- **环境**：PC（x86_64 Ubuntu）+ rknn-toolkit **1.7.x**（一代，RV1126 专用）；
-- **转换四步**：`config`（目标平台 + mean/std）→ `load_tflite/load_onnx` → `build` → `export_rknn`，产出 `.rknn` 文件；
-- **模拟推理**：`init_runtime()` 无参即 PC 模拟，`inference` 出分类结果；
-- **关键认知**：mean/std 预处理由运行时自动完成，必须与模型训练一致；换模型框架只换 load 函数。
+- **环境安装**：PC（x86_64 Ubuntu）+ rknn-toolkit **1.6.x**（一代，RV1126 专用）；
+- **test脚本作用**：    
+    1. 下载 ONNX 模型（若本地不存在）
+    2. 配置模型转换参数（均值、标准差、通道顺序、目标平台）
+    3. 加载 ONNX 模型
+    4. 构建（转换）为 RKNN 模型（可包含量化）
+    5. 导出 .rknn 文件
+    6. 初始化运行环境（模拟器或真实 NPU 设备）
+    7. 输入图片进行推理，并输出 Top-5 分类结果
 
-现在你手里的 `.rknn` 是**未量化的浮点版本**——转换跑通了，但还没发挥 NPU 的真正实力（2 TOPS 是 INT8 算力）。下一步的核心工作就是量化：用校准数据集把模型变成 INT8，同时保证精度不塌。这是整个部署流程里技术含量最高的部分。
+下一步将基于转换生成的`.rknn`文件在开发板端完成模型运行，我们将使用瑞芯微官方提供的`rknn_model_zoo`仓库示例代码，其中包含更多的模型文件与测试程序，也是我们后续文章要学习的主要内容，感兴趣的可以提前了解。
 
 > 🏷️ 标签：#RKNN #模型转换 #TFLite #ONNX #模拟推理 #环境搭建

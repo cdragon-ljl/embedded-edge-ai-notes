@@ -117,7 +117,7 @@ export default function ArticlePage({
         </div>
 
         {/* Article content */}
-        <ArticleContent content={article.content} />
+        <ArticleContent content={article.content} seriesId={params.series} />
 
         {/* Prev / Next navigation */}
         <ArticleNav prev={prev} next={next} seriesId={params.series} />
